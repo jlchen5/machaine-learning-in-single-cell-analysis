@@ -1,0 +1,39 @@
+install.packages(c("devtools", "data.table", "wesanderson",  "devtools", "AUCell", "GSEABase", "GSVA", "ggplot2","rsvd"))
+install.packages("E:/super.lesson/lesson6/phangorn_2.8.1.zip", repos = NULL, type = "win.binary")
+install.packages("E:/super.lesson/lesson6/quadprog_1.5-8.zip", repos = NULL, type = "win.binary")
+devtools::install_github("YosefLab/VISION")
+install.packages("BiocManager")
+
+BiocManager::install("AUCell")
+BiocManager::install("GSEABase")
+BiocManager::install("GSVA")
+
+
+devtools::install_github("wu-yc/scMetabolism")
+ 
+
+getwd()
+library(scMetabolism)
+library(ggplot2)
+library(rsvd)
+
+load(file = "pbmc_demo.rda")
+
+countexp.Seurat<-sc.metabolism.Seurat(obj = countexp.Seurat, method = "VISION", imputation = F, ncores = 2, metabolism.type = "KEGG")
+
+
+
+DimPlot.metabolism(obj = countexp.Seurat, pathway = "Glycolysis / Gluconeogenesis", dimention.reduction.type = "umap", dimention.reduction.run = F, size = 1)
+
+##Dot plot
+input.pathway<-c("Glycolysis / Gluconeogenesis", "Oxidative phosphorylation", "Citrate cycle (TCA cycle)")
+DotPlot.metabolism(obj = countexp.Seurat, pathway = input.pathway, phenotype = "ident", norm = "y")
+
+
+
+## Box plot
+BoxPlot.metabolism(obj = countexp.Seurat, pathway = input.pathway, phenotype = "ident", ncol = 1)
+
+metabolism.matrix<-sc.metabolism(countexp = countexp, method = "VISION", imputation = F, ncores = 2, metabolism.type = "KEGG")
+
+

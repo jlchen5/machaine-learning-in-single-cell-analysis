@@ -1,0 +1,97 @@
+###加载所需要的包
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(patchwork)
+library(harmony)
+library(cowplot)
+library(ggplot2)
+load("scRNA1.rdata")
+
+
+###########################################################################################
+
+table(scRNA1@active.ident)
+Idents(scRNA1)="celltype"
+##scRNA1@active.ident=scRNA1@meta.data$celltype
+deg=FindMarkers(scRNA1,ident.1 = "Adipocytes",ident.2 = "Granulocytes",
+                min.pct = 0.01,logfc.threshold = 0.01)
+
+genelist=deg$avg_log2FC
+names(genelist)=toupper(rownames(deg))
+# Changing to Upper case.
+#result <- toupper("Changing To Upper")
+#print(result)
+# Changing to lower case.
+#result <- tolower("Changing To Lower")
+genelist=sort(genelist,decreasing = T)
+library(ggplot2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(GSEABase)
+library(enrichplot)
+getwd()
+setwd("E:\\super.lesson\\lesson11")
+geneset=read.gmt("c2.cp.kegg.v7.5.1.symbols.gmt")
+length(unique(geneset$term))
+egmt=GSEA(genelist,TERM2GENE = geneset,
+          minGSSize = 1,pvalueCutoff = 0.5)
+
+gseaplot2(egmt,geneSetID =c(1,2),pvalue_table = T)
+gseaplot2(egmt,geneSetID =c(1),pvalue_table = F)
+gseaplot(egmt,geneSetID = 1,pvalue_table = T)
+kegg.res=egmt@result
+down.kegg.res<-kegg.res[(kegg.res$pvalue<0.05 & kegg.res$enrichmentScore < -0.3),]
+down.kegg.res$group=1
+
+up.kegg.res<-kegg.res[(kegg.res$pvalue<0.05 & kegg.res$enrichmentScore > 0.3),]
+up.kegg.res$group=1
+
+lapply(1:nrow(down.kegg.res), function(i){
+  
+  gseaplot2(egmt,down.kegg.res$ID[i],title = down.kegg.res$Description[i],pvalue_table = T)
+  ggsave(paste0(gsub("/","_",down.kegg.res$Description[i]),".down.pdf"),width = 11,height =5)
+}
+)
+
+down.kegg.res$ID[1]
+lapply(1:nrow(up.kegg.res), function(i){
+  
+  gseaplot2(egmt,up.kegg.res$ID[i],title = up.kegg.res$Description[i],pvalue_table = T)
+  ggsave(paste0(gsub("/","-",up.kegg.res$Description[i]),".up.pdf"),width = 11,height =5)
+}
+)
+#########################################################################################
+##install.packages("msigdbr")
+
+library(msigdbr)
+##BiocManager::install("fgsea")
+library(fgsea)
+msigdbr_species()
+
+fgsea能够快速对预选基因集进行GSEA富集分析，预选基因集可以是自己设定，一般使用MSigdb数据库（同样由提出GSEA方法团队提供）。
+fgsea（）函数需要一个基因集列表以及对应值，主要是基因名和AUC(ROC曲线下方的面积大小，简单说就是代表准确性，准确性越高，AUC值越大)，其中基因集中的基因名要与数据集（pathway）中的基因名相对应。
+fgsea包中的plotEnrichment函数用于GSEA图的绘制。
+
+m_df<- msigdbr(species = "Mus musculus",  category = "C2", subcategory = "KEGG")
+fgsea_sets<- m_df %>% split(x = .$gene_symbol, f = .$gs_name)
+
+
+
+genelist=deg$avg_log2FC
+names(genelist)= rownames(deg)
+
+genelist=sort(genelist,decreasing = T)
+?fgsea
+fgseaRes<- fgsea(fgsea_sets, stats = genelist )
+
+ggplot(fgseaRes %>% filter(padj < 0.005) %>% head(n= 20), aes(reorder(pathway, NES), NES)) +
+  geom_col(aes(fill= NES < 1.5)) +
+  coord_flip() +
+  labs(x="Pathway", y="Normalized Enrichment Score",
+       title="Hallmark pathways NES from GSEA") +
+  theme_minimal() ####以1.5进行绘图填色
+
+
+plotEnrichment(fgsea_sets[["KEGG_ABC_TRANSPORTERS"]],
+               genelist) + labs(title="KEGG_ABC_TRANSPORTERS")

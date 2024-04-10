@@ -1,0 +1,673 @@
+###加载所需要的包
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(patchwork)
+
+x=list.files()
+
+dir = c('BC2/', "BC21/")
+names(dir) = c('BC2',  'BC21')      
+
+
+counts <- Read10X(data.dir =dir)
+scRNA1 = CreateSeuratObject(counts,min.cells = 3, min.features = 200)
+table(scRNA1@meta.data$orig.ident)
+dir[1]
+
+scRNAlist <- list()
+for(i in 1:length(dir)){
+  counts <- Read10X(data.dir = dir[i])
+  scRNAlist[[i]] <- CreateSeuratObject(counts, min.cells = 3, min.features =300)
+}
+
+counts <- Read10X(data.dir = "BC2/")
+scRNAlist[[1]] <- CreateSeuratObject(counts, min.cells = 3, min.features =300)
+
+counts <- Read10X(data.dir = "BC3/")
+scRNAlist[[2]] <- CreateSeuratObject(counts, min.cells = 3, min.features =300)
+
+counts <- Read10X(data.dir = "BC5/")
+scRNAlist[[3]] <- CreateSeuratObject(counts, min.cells = 3, min.features =300)
+
+
+
+save(scRNAlist,file = "scRNAlist.Rdata")
+load("F:/gl/huada/scRNAlist.Rdata")
+
+for (i in 1:length(scRNAlist)) {
+  scRNAlist[[i]] <- NormalizeData(scRNAlist[[i]])
+  scRNAlist[[i]] <- FindVariableFeatures(scRNAlist[[i]], selection.method = "vst",nfeatures = 3000)
+}
+
+
+library(future)
+plan("multiprocess", workers =3)
+options(future.globals.maxSize = 2000 * 1024^2)
+
+features <- SelectIntegrationFeatures(object.list = scRNAlist)
+?FindIntegrationAnchors
+scRNA.anchors <- FindIntegrationAnchors(object.list = scRNAlist,anchor.features = features)
+
+scRNA1 <- IntegrateData(anchorset = scRNA.anchors)
+save(scRNA1,file = "IntegrateData.Rdata")
+x=scRNA1@meta.data
+z1=x$orig.ident
+z2=x[,1]
+z3=x[1,]
+class(x)
+character()
+data.frame()
+matrix()
+list()
+
+
+DefaultAssay(scRNA1) <- "integrated"
+
+scRNA1=ScaleData(scRNA1)
+
+scRNA1 <- RunPCA(scRNA1, npcs = 30, verbose = T)
+# t-SNE and Clustering
+
+scRNA1 <- FindNeighbors(scRNA1, reduction = "pca", dims = 1:20)
+scRNA1 <- FindClusters(scRNA1, resolution = 0.8)
+scRNA1 <- RunUMAP(scRNA1, reduction = "pca", dims = 1:20)
+colnames(scRNA1@meta.data)
+scRNA1 <- RunTSNE(scRNA1, dims = 1:20)
+colnames(scRNA1@meta.data)
+DimPlot(scRNA1, reduction = "umap", group.by = "orig.ident")
+DimPlot(scRNA1, reduction = "umap", label = TRUE)
+
+#############################################################################
+DefaultAssay(scRNA1) <- "RNA"
+scRNA <- ScaleData(scRNA1)
+
+
+#####################################################################
+install.packages("devtools")
+library(devtools)
+install_github("immunogenomics/harmony")
+library(harmony)
+BiocManager::install("SingleCellExperiment")
+
+
+scRNA.11=Read10X("BC2/")
+scRNA.3=Read10X("BC21/")
+scRNA.11 = CreateSeuratObject(scRNA.11 ,project="sample_11",min.cells = 3, min.features = 200)
+scRNA.3 = CreateSeuratObject(scRNA.3 ,project="sample_3",min.cells = 3, min.features = 200)
+
+scRNA_harmony <- merge(scRNA.11, y=c(scRNA.3 ))
+scRNA_harmony <- NormalizeData(scRNA_harmony) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA(verbose=FALSE)
+
+system.time({scRNA_harmony <- RunHarmony(scRNA_harmony, group.by.vars = "orig.ident")})
+###问题 harmony之后的数据在哪里？
+
+
+###一定要指定harmony
+scRNA_harmony <- FindNeighbors(scRNA_harmony, reduction = "harmony", dims = 1:15) %>% FindClusters(resolution = 0.5)
+
+scRNA_harmony <- RunUMAP(scRNA_harmony, reduction = "harmony", dims = 1:16)
+?DimPlot
+plot1 =DimPlot(scRNA_harmony, reduction = "umap",label = T) 
+plot2 = DimPlot(scRNA_harmony, reduction = "umap", group.by='orig.ident') 
+#combinate
+plotc <- plot1+plot2
+plotc
+
+
+################################################################################################################################
+
+
+markers <- FindAllMarkers(object = scRNA_harmony, test.use="wilcox" ,
+                          only.pos = TRUE,
+                          logfc.threshold = 0.25)   
+all.markers =markers %>% dplyr::select(gene, everything()) %>% subset(p_val<0.05)
+top10 = all.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+
+
+
+scRNA_harmony@meta.data$seurat_clusters
+
+scRNA_harmony <- RenameIdents(scRNA_harmony, "12" = "Macrophage","0"="Macrophage","2"="MSc")
+DimPlot(scRNA_harmony,label = T,group.by = "seurat_clusters")
+scRNA_harmony@meta.data$celltype=scRNA_harmony@active.ident
+
+
+
+
+
+
+
+
+
+
+
+###################### 三种注释软件使用 ############
+
+setwd("C:/shangke/lession12/")
+###加载所需要的包
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(patchwork)
+library(SingleR)
+library(org.Hs.eg.db)
+BiocManager::install("scRNAseq")
+
+library(scRNAseq)
+##这里，我们使用来自scRNAseq包中的两个人类胰腺数据集。目的是使用一个预先标记好的数据集对另一个未标记的数据集进行细胞类型注释。
+#首先，我们使用Muraro et al.(2016)的数据作为我们的参考数据集。
+ 
+sceM <- MuraroPancreasData()
+#移除未标记的细胞
+sceM.1 <- sceM[,!is.na(sceM$label)]
+BiocManager::install("scater")
+library(scater)
+sceM.1 <- logNormCounts(sceM.1)
+
+##接下来，我们使用Grun et al.(2016)的数据作为测试数据集。
+##有时候可能网速不好哟
+sceG <- GrunPancreasData()
+
+# Remove libraries with no counts.
+sceG <- sceG[,colSums(counts(sceG)) > 0] 
+sceG <- logNormCounts(sceG) 
+#为了加快分析的速度，我们挑选前200个细胞进行分析。
+sceG <- sceG[,1:500]
+
+# 使用SingleR函数进行细胞类型注释，并指定de.method="wilcox"检测方法
+pred.grun <- SingleR(test=sceG, ref=sceM.1, labels=sceM.1$label, de.method="wilcox")
+
+# 查看细胞类型注释的预测结果
+table(pred.grun$labels)
+
+plotScoreHeatmap(pred.grun)
+#使用pruneScores()函数删除那些质量低下或模棱两可的分配
+remove.cell <- pruneScores(pred.grun)
+
+summary(remove.cell)
+#低于3个中位数绝对偏差（MAD）值来定义适当的阈值
+plotScoreDistribution(pred.grun, ncol =5, show.nmads = 3)
+
+##如果必须调整某些参数，我们可以直接使用调整后的参数来调用pruneScores()函数。
+#这里，我们将要丢弃的标签设置为NA，这也是SingleR()函数如何在pruned.labels中标记此类标签的方式。
+
+new.pruned <- pred.grun$labels
+new.pruned[pruneScores(pred.grun, nmads=5)] <- NA
+
+table(new.pruned, useNA="always")
+
+
+all.markers <- metadata(pred.grun)$de.genes
+sceG$labels <- pred.grun$labels
+
+# Beta cell-related markers
+plotHeatmap(sceG, order_columns_by="labels",
+            features=unique(unlist(all.markers$beta))) 
+
+##展示各个cluster的marker
+for (lab in unique(pred.grun$labels)) {
+  plotHeatmap(sceG, order_columns_by=list(I(pred.grun$labels)), 
+              features=unique(unlist(all.markers[[lab]]))) 
+}
+
+
+################################################################################################################
+BiocManager::install(c('BiocGenerics', 'DelayedArray', 'DelayedMatrixStats',
+                       'limma', 'S4Vectors', 'SingleCellExperiment',"batchelor",
+                       'SummarizedExperiment'))
+
+
+# 安装monocle3
+devtools::install_github('cole-trapnell-lab/monocle3')
+library(monocle3)
+## 然后安装常用的人和小鼠的基因信息数据库
+BiocManager::install(c('org.Hs.eg.db', 'org.Mm.eg.db'))
+
+## 最后安装garnett
+devtools::install_github("cole-trapnell-lab/garnett", ref="monocle3")
+library(garnett)
+
+download.file(url="https://cole-trapnell-lab.github.io/garnett/marker_files/hsPBMC_markers.txt",
+              destfile = "hsPBMC_markers.txt")
+
+download.file(url="https://cf.10xgenomics.com/samples/cell-exp/3.0.2/5k_pbmc_v3_nextgem/5k_pbmc_v3_nextgem_filtered_feature_bc_matrix.h5", 
+              destfile = "pbmc.h5")
+
+download.file(url="https://cole-trapnell-lab.github.io/garnett/classifiers/hsPBMC_20191017.RDS",
+              destfile = "hsPBMC.rds")
+getwd()
+## 创建seurat对象并降维聚类
+ 
+ 
+load("C:/shangke/lession11/scRNA_harmony.rdata")
+pbmc <- scRNA_harmony
+cell=sample(colnames(scRNA_harmony),3000)
+pbmc=pbmc[,cell]
+pbmc <- SCTransform(pbmc)
+pbmc <- RunPCA(pbmc, verbose = F)
+ElbowPlot(pbmc)
+pc.num=1:15
+pbmc <- pbmc %>% RunTSNE(dims=pc.num) %>% RunUMAP(dims=pc.num) %>%
+  FindNeighbors(dims = pc.num) %>% FindClusters(resolution=0.8) 
+
+## 创建CDS对象
+data <- GetAssayData(pbmc, assay = 'RNA', slot = 'counts')
+cell_metadata <- pbmc@meta.data
+gene_annotation <- data.frame(gene_short_name = rownames(data))
+rownames(gene_annotation) <- rownames(data)
+cds <- new_cell_data_set(data,
+                         cell_metadata = cell_metadata,
+                         gene_metadata = gene_annotation)
+#preprocess_cds函数相当于seurat中NormalizeData+ScaleData+RunPCA
+cds <- preprocess_cds(cds, num_dim = 30)
+
+## 演示利用marker file训练分类器
+# 对marker file中marker基因评分
+marker_check <- check_markers(cds, "hsPBMC_markers.txt",
+                              db=org.Hs.eg.db,
+                              cds_gene_id_type = "SYMBOL",
+                              marker_file_gene_id_type = "SYMBOL")
+plot_markers(marker_check)
+
+
+# 使用marker file和cds对象训练分类器
+pbmc_classifier <- train_cell_classifier(cds = cds,
+                                         marker_file = "hsPBMC_markers.txt",
+                                         db=org.Hs.eg.db,
+                                         cds_gene_id_type = "SYMBOL",
+                                         num_unknown = 50,
+                                         marker_file_gene_id_type = "SYMBOL")
+saveRDS(pbmc_classifier, "my_classifier.rds")
+
+#使用garnett官网训练好的分类器预测数据。
+download.file(url="https://cole-trapnell-lab.github.io/garnett/classifiers/hsPBMC_20191017.RDS",
+              destfile = "hsPBMC.rds", mode = "wb")
+
+hsPBMC <- readRDS("hsPBMC.rds")
+
+pData(cds)$garnett_cluster <- pData(cds)$seurat_clusters
+cds <- classify_cells(cds,
+                      hsPBMC, 
+                      db = org.Hs.eg.db,
+                      cluster_extend = TRUE,
+                      cds_gene_id_type = "SYMBOL")
+
+# 提取分类结果
+cds.meta <- subset(pData(cds), select = c("cell_type", "cluster_ext_type")) %>% as.data.frame()
+## 将结果返回给seurat对象
+pbmc <- AddMetaData(pbmc, metadata = cds.meta)
+
+tsne=as.data.frame(pbmc@reductions[["tsne"]]@cell.embeddings)
+data = as.data.frame(pData(cds))
+data.umap=merge(data,tsne,by=0)
+colnames(data.umap)
+qplot(tSNE_1, tSNE_2, color = cell_type, data = data.umap) + theme_bw()
+?qplot
+
+qplot(tSNE_1, tSNE_2, color = cluster_ext_type, data = data.umap) + theme_bw()
+##上图中第一个图显示了Garnett的细胞类型分配，第二张图显示了Garnett的cluster群扩展类型分配。
+###################################################################################################################
+
+## 细胞分类之Azimuth
+ 
+pbmc_counts <- pbmc@assays$RNA@counts
+saveRDS(pbmc_counts, "pbmc_counts.rds")
+#上传http://azimuth.satijalab.org/app/azimuth网站在线分类，分类结果为azimuth_pred.tsv文件
+predictions <- read.delim('azimuth_pred.tsv', row.names = 1)
+pbmc <- AddMetaData(pbmc, metadata = predictions)
+colnames(predictions)
+ DimPlot(pbmc, group.by = "predicted.celltype.l2", label = T, 
+             label.size = 3) +  ggtitle("Classified by Azimuth")+ ggsci::scale_color_igv()
+
+
+
+
+
+
+
+
+
+
+
+######################### 手动注释
+
+##系统报错改为英文
+Sys.setenv(LANGUAGE = "en")
+##禁止转化为因子
+options(stringsAsFactors = FALSE)
+##清空环境
+rm(list=ls())
+
+setwd("D:/shangke/lession11/")
+###加载所需要的包
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(patchwork)
+
+x=list.files()
+
+dir = c('BC2/', "BC21/")
+names(dir) = c('BC2',  'BC21')      
+
+
+counts <- Read10X(data.dir =dir)
+scRNA1 = CreateSeuratObject(counts,min.cells = 3, min.features = 200)
+table(scRNA1@meta.data$orig.ident)
+dir[1]
+
+scRNAlist <- list()
+for(i in 1:length(dir)){
+  counts <- Read10X(data.dir = dir[i])
+  scRNAlist[[i]] <- CreateSeuratObject(counts, min.cells = 3, min.features =300)
+}
+
+counts <- Read10X(data.dir = "BC2/")
+scRNAlist[[1]] <- CreateSeuratObject(counts, min.cells = 3, min.features =300)
+
+counts <- Read10X(data.dir = "BC3/")
+scRNAlist[[2]] <- CreateSeuratObject(counts, min.cells = 3, min.features =300)
+
+counts <- Read10X(data.dir = "BC5/")
+scRNAlist[[3]] <- CreateSeuratObject(counts, min.cells = 3, min.features =300)
+
+
+
+save(scRNAlist,file = "scRNAlist.Rdata")
+load("F:/gl/huada/scRNAlist.Rdata")
+
+for (i in 1:length(scRNAlist)) {
+  scRNAlist[[i]] <- NormalizeData(scRNAlist[[i]])
+  scRNAlist[[i]] <- FindVariableFeatures(scRNAlist[[i]], selection.method = "vst",nfeatures = 3000)
+}
+
+
+library(future)
+plan("multiprocess", workers =3)
+options(future.globals.maxSize = 2000 * 1024^2)
+?FindIntegrationAnchors
+scRNA.anchors <- FindIntegrationAnchors(object.list = scRNAlist,anchor.features = 2000)
+
+scRNA1 <- IntegrateData(anchorset = scRNA.anchors)
+save(scRNA1,file = "IntegrateData.Rdata")
+x=scRNA1@meta.data
+z1=x$orig.ident
+z2=x[,1]
+z3=x[1,]
+class(x)
+character()
+data.frame()
+matrix()
+list()
+
+
+DefaultAssay(scRNA1) <- "integrated"
+
+scRNA1=ScaleData(scRNA1)
+
+scRNA1 <- RunPCA(scRNA1, npcs = 30, verbose = T)
+# t-SNE and Clustering
+
+scRNA1 <- FindNeighbors(scRNA1, reduction = "pca", dims = 1:20)
+scRNA1 <- FindClusters(scRNA1, resolution = 0.8)
+scRNA1 <- RunUMAP(scRNA1, reduction = "pca", dims = 1:20)
+colnames(scRNA1@meta.data)
+scRNA1 <- RunTSNE(scRNA1, dims = 1:20)
+colnames(scRNA1@meta.data)
+DimPlot(scRNA1, reduction = "umap", group.by = "orig.ident")
+DimPlot(scRNA1, reduction = "umap", label = TRUE)
+
+#############################################################################
+DefaultAssay(scRNA1) <- "RNA"
+scRNA <- ScaleData(scRNA1)
+
+
+#####################################################################
+#install.packages("devtools")
+library(devtools)
+##install_github("immunogenomics/harmony")
+library(harmony)
+##BiocManager::install("SingleCellExperiment")
+
+
+scRNA.11=Read10X("BC2/")
+scRNA.3=Read10X("BC21/")
+scRNA.11 = CreateSeuratObject(scRNA.11 ,project="sample_11",min.cells = 3, min.features = 200)
+scRNA.3 = CreateSeuratObject(scRNA.3 ,project="sample_3",min.cells = 3, min.features = 200)
+
+scRNA_harmony <- merge(scRNA.11, y=c(scRNA.3 ))
+scRNA_harmony <- NormalizeData(scRNA_harmony) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA(verbose=FALSE)
+
+system.time({scRNA_harmony <- RunHarmony(scRNA_harmony, group.by.vars = "orig.ident")})
+###问题 harmony之后的数据在哪里？
+
+
+###一定要指定harmony
+scRNA_harmony <- FindNeighbors(scRNA_harmony, reduction = "harmony", dims = 1:15) %>% FindClusters(resolution = 0.5)
+
+scRNA_harmony <- RunUMAP(scRNA_harmony, reduction = "harmony", dims = 1:16)
+?DimPlot
+plot1 =DimPlot(scRNA_harmony, reduction = "umap",label = T) 
+plot2 = DimPlot(scRNA_harmony, reduction = "umap", group.by='orig.ident') 
+#combinate
+plotc <- plot1+plot2
+plotc
+
+
+Osteoblastic = c("COL1A1","CDH11","RUNX2")
+DotPlot(scRNA_harmony, features = Osteoblastic) + RotatedAxis()
+
+CXCL12, SFRP2, and MME (CD10)
+
+
+scRNA_harmony <- RenameIdents(scRNA_harmony, "11" = "Osteoblastic","1"="Osteoblastic")
+
+DimPlot(scRNA_harmony)
+
+
+
+#######################################################################################
+
+markers <- FindAllMarkers(object = scRNA_harmony, test.use="wilcox" ,
+                          only.pos = TRUE,
+                          logfc.threshold = 0.25)   
+all.markers =markers %>% dplyr::select(gene, everything()) %>% subset(p_val<0.05)
+top10 = all.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+
+
+
+scRNA_harmony@meta.data$seurat_clusters
+
+scRNA_harmony <- RenameIdents(scRNA_harmony, "12" = "Macrophage","0"="Macrophage","2"="MSc")
+DimPlot(scRNA_harmony,label = T,group.by = "seurat_clusters")
+scRNA_harmony@meta.data$celltype=scRNA_harmony@active.ident
+
+?FindAllMarkers
+DefaultAssay(scRNA_harmony) <- "RNA" 
+##注：虽然这个函数的默认设置是从 "RNA "插槽中获取数据，但我们鼓励你运行上面的这行代码，
+##以防止在分析的上游某处改变了默认分析。原始计数和归一化计数都存储在这个位置中，用于查找标记的函数将自动提取原始计数。 
+
+install.packages('BiocManager')
+BiocManager::install('multtest')
+install.packages('metap')
+
+colnames(scRNA_harmony@meta.data)
+table(scRNA_harmony@meta.data$orig.ident)
+marker2= FindConservedMarkers(scRNA_harmony,
+                              ident.1 = 1,
+                              grouping.var = "orig.ident",
+                              only.pos = TRUE,
+                              min.diff.pct = 0.25,
+                              min.pct = 0.25,
+                              logfc.threshold = 0.25)
+
+
+
+
+
+###################################################################################
+
+
+
+
+#第二种方法用SingleR鉴定细胞类型
+BiocManager::install("SingleR")
+library(SingleR)
+
+x=HumanPrimaryCellAtlasData()
+
+##把师傅给你的百度云打开 下载其中的人的数据库，因为你们没有vpn，所以singler的数据库没法下载
+###下载好数据库后，把ref_Human_all.Rdata加载到环境中，这样算是对数据库的加载，就可以按照singler的算法来对细胞亚群进行定义了。
+load("ref_Human_all.RData")
+###我们可以看到在环境中多了一个叫ref_Human_all的文件 大小为113mb  这个就是数据库
+####然后我们把环境中的ref_Human_all赋值与refdata
+refdata <- ref_Human_all
+###把rna的转录表达数据提取
+?GetAssayData
+testdata <- GetAssayData(scRNA_harmony, slot="data")
+###把scRNA数据中的seurat_clusters提取出来，注意这里是因子类型的
+clusters <- scRNA_harmony@meta.data$seurat_clusters
+###开始用singler分析
+cellpred <- SingleR(test = testdata, ref = refdata, labels = refdata$label.main, 
+                    method = "cluster", clusters = clusters, 
+                    assay.type.test = "logcounts", assay.type.ref = "logcounts")
+###制作细胞类型的注释文件
+celltype = data.frame(ClusterID=rownames(cellpred), celltype=cellpred$labels, stringsAsFactors = FALSE)
+###保存一下
+write.csv(celltype,"celltype_singleR.csv",row.names = FALSE)
+##把singler的注释写到metadata中 有两种方法
+###方法一
+scRNA_harmony@meta.data$celltype ="NA"
+for(i in 1:nrow(celltype)){
+  scRNA_harmony@meta.data[which(scRNA_harmony@meta.data$seurat_clusters == celltype$ClusterID[i]),'celltype'] <- celltype$celltype[i]
+}
+
+
+which(scRNA_harmony@meta.data$seurat_clusters == celltype$ClusterID[1])
+
+###因为我把singler的注释加载到metadata中时候，命名的名字叫celltype，所以画图时候，group.by="celltype"
+DimPlot(scRNA_harmony, group.by="celltype", label=T, label.size=5)
+###方法二：
+celltype = data.frame(ClusterID=rownames(cellpred), celltype=cellpred$labels, stringsAsFactors = F) 
+scRNA_harmony@meta.data$singleR=celltype[match(clusters,celltype$ClusterID),'celltype']
+###因为我把singler的注释加载到metadata中时候，命名的名字叫singleR，所以画图时候，group.by="singleR"
+DimPlot(scRNA_harmony, group.by="singleR", label=T, label.size=5)
+###我们可以看到  两种方法得到的结果都是一样的，但是我比较喜欢第二种方法
+
+##鉴定结果展示
+p1 = DimPlot(scRNA1, group.by="celltype", label=T, label.size=5, reduction='tsne')
+p1
+p2 = DimPlot(scRNA1, group.by="celltype", label=T, label.size=5, reduction='umap')
+p2
+p3 = plotc <- p1+p2+ plot_layout(guides = 'collect')
+p3 
+ggsave("tSNE_celltype.pdf", p1, width=7 ,height=6)
+ggsave("UMAP_celltype.pdf", p2, width=7 ,height=6)
+ggsave("celltype.pdf", p3, width=10 ,height=5)
+ggsave("celltype.png", p3, width=10 ,height=5)
+
+
+
+
+
+#############################sct
+
+####设置工作路径
+setwd("D:/shangke/lession9/BC21/")
+###加载所需要的包
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(patchwork)
+####清除环境，就是把环境清空了
+rm(list=ls())
+
+##读取10x的数据
+scRNA.counts=Read10X("D:/shangke/lession9/BC21/")
+
+###创建Seurat对象
+scRNA = CreateSeuratObject(scRNA.counts ,min.cells = 3,project="os", min.features = 300)
+
+exp=as.matrix(scRNA@assays$RNA@counts) 
+
+
+gene_attr=data.frame(mean=rowMeans(exp),
+                     detection_rate=rowMeans(exp>0),
+                     var=apply(exp,1,var))
+
+gene_attr$log_mean=log10(gene_attr$mean)
+gene_attr$log_var=log10(gene_attr$var)
+rownames(gene_attr)=rownames(exp)
+
+ggplot(gene_attr,aes(log_mean,log_var))+geom_point(alpha=0.3,shape=16)+
+  geom_density_2d(size=0.3)+geom_abline(intercept=0,slope=1,color="red")
+
+gene_attr$detecion_rat=1-dpois(0,lambda = 10^(gene_attr$log_mean))
+
+colnames(gene_attr)
+x=seq(from=-3,to=2,length.out=1000)
+poisson_model=data.frame(log_mean=x,detection_rate=1-dpois(0,lambda = 10^x))
+
+ggplot(gene_attr,aes(log_mean,detection_rate))+geom_point(alpha=0.3,shape=16)+
+  geom_line(data =poisson_model,color="red")+theme_gray(base_size = 8)
+
+cell_attr=data.frame(n_umi=colSums(exp),n_gene=colSums(exp>0))
+ggplot(cell_attr,aes(n_umi,n_gene))+geom_point(alpha=0.3,shape=16)+geom_density_2d(size=0.3)
+
+####run sctransform
+set.seed(44)
+vst_out=sctransform::vst(exp,latent_var=c("log_umi"),return_gene_attr=TRUE,
+                         return_cell_attr=TRUE)
+sctransform::plot_model(vst_out,exp,c("MALAT1","RPL10","FTL"),plot_residual=TRUE)
+
+
+################################################################
+scRNA=NormalizeData(scRNA)
+?ScaleData
+scRNA=ScaleData(scRNA,features = rownames(scRNA))
+regular.df=data.frame()
+
+x=c("MALAT1","RPL10","FTL")
+for (i in x) {
+  tmp=data.frame(cell.log.umi=log10(scRNA@meta.data$nCount_RNA+1),
+                 scale.residual=scRNA@assays$RNA@scale.data[i,],
+                 scale.residual=as.numeric(scale.residual),
+                 gene=rep(i,length(log10(scRNA@meta.data$nCount_RNA+1)))
+  )                  
+  regular.df=rbind(regular.df,tmp)
+}
+
+
+ggplot(regular.df,aes(cell.log.umi,scale.residual))+geom_point(alpha=0.3,shape=16)+
+  geom_density_2d(size=0.3,color="red")+facet_wrap(.~factor(gene,levels=c("MALAT1","RPL10","FTL")))
+
+###############################################################################################################
+##完整的流程
+
+scRNA.counts=Read10X("C:/shangke/lession9/BC21/")
+
+###创建Seurat对象
+scRNA = CreateSeuratObject(scRNA.counts ,min.cells = 3,project="os", min.features = 300)
+scRNA <- PercentageFeatureSet(scRNA, pattern = "^MT-", col.name = "percent.mt")
+scRNA <- SCTransform(scRNA, vars.to.regress = "percent.mt", verbose = FALSE)
+
+######别看SCTransform只有一个单独的函数，其实它做了：NormalizeData 、ScaleData、FindVariableFeatures 的事情
+########并且也支持ScaleData的vars.to.regress
+
+##运行的结果存储在：
+scRNA@assays$SCT) 
+#或者
+scRNA[["SCT"]]
+
+##降维，然后聚类
+
+scRNA <- RunPCA(scRNA, verbose = FALSE)
+scRNA <- RunUMAP(scRNA, dims = 1:30, verbose = FALSE)
+
+scRNA <- FindNeighbors(scRNA, dims = 1:30, verbose = FALSE)
+scRNA <- FindClusters(scRNA, verbose = FALSE)
+DimPlot(scRNA, label = TRUE) + NoLegend()
+
+
+

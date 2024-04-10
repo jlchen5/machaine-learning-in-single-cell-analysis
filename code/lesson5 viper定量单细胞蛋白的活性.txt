@@ -1,0 +1,148 @@
+source('functions/process-utils.R')
+source('functions/cluster-functions.R')
+source('functions/viper-utils.R')
+library(ggplot2)
+library(ggpubr)
+##BiocManager::install("viper")
+library(viper)
+library(pheatmap)
+library(RColorBrewer)
+##require(devtools)
+##devtools::install_github("JEFworks/MUDAN")
+##mudan 牡丹 means peony in Chinese
+
+library(MUDAN)
+#install.packages("umap")
+library(umap)
+raw.mat <- readRDS('tutorial/pbmc.rds')
+
+
+mt.genes <- read.table('mt-genes.csv', header = TRUE, sep = ',', stringsAsFactors = FALSE)
+hum.mt <- mt.genes$hum.ensg
+QCPlots(raw.mat, hum.mt)
+mt.mat <- MTFilter(raw.mat, hum.mt)
+filt.mat <- QCTransform(mt.mat)
+cpm.mat <- CPMTransform(filt.mat)
+rank.mat <- RankTransform(cpm.mat)
+
+#######################################################################################
+### 可以不用转化 直接使用作者给提供的
+
+setwd("E:/super.lesson/lesson5/pbmc/")
+gene.ens=read.table("tf.ens.txt",sep = "\t",header = T)
+library(org.Hs.eg.db)
+library(dplyr)
+keytypes(org.Hs.eg.db)
+x=keys(org.Hs.eg.db,keytype = c("ENSEMBL"))
+
+x2=AnnotationDbi::select(org.Hs.eg.db, keys=gene.ens$Ensembl.ID, columns=c("ENTREZID", "SYMBOL"), keytype="ENSEMBL")
+
+write.table(x2$ENTREZID,file = "tf.entrized.txt",row.names = F,quote = F,sep = "\t",col.names = F)
+
+
+########################################################################################
+##The data must first be saved in a format that is compatible with the Java 
+###based ARACNe-AP implementation included in this pipeline:
+##保存数据
+setwd("E:/super.lesson/lesson5/pbmc/")
+dim(cpm.mat)
+ARACNeTable(cpm.mat, 'exp.cpm.txt')
+
+raw.mat.c <-  cpm.mat
+raw.mat.c =as.data.frame(raw.mat.c)
+
+
+x3=AnnotationDbi::select(org.Hs.eg.db, keys=rownames(raw.mat.c), columns=c("ENTREZID", "SYMBOL"), keytype="ENSEMBL")
+
+raw.mat.1=merge(x3,raw.mat.c,by.x=1,by.y=0)
+raw.mat.2=na.omit(raw.mat.1)
+raw.mat.3=distinct(raw.mat.2,ENTREZID,.keep_all = T)
+rownames(raw.mat.3)=raw.mat.3$ENTREZID
+colnames(raw.mat.3)[2]="gene"
+raw.mat.4=raw.mat.3[,-c(1,3)]
+getwd()
+colnames(raw.mat.4)= c("gene",paste0("sample",1:2700)) 
+write.table(raw.mat.4,file = "exp1.txt",row.names = F,quote = F,sep = "\t")
+## 或者用下面代码保存表达矩阵
+ARACNeTable(raw.mat.4, 'exp1.txt')
+
+################################################################################
+
+
+java -Xmx5G -jar aracne-ap.jar -e matrix.txt  -o outputFolder --tfs tfs.txt --pvalue 1E-8 --seed 1 --calculateThreshold
+
+java -Xmx5G -jar aracne-ap.jar -e exp1.txt  -o outputFolder --tfs tf.entrized.txt --pvalue 1E-8 --seed 1  --threads 30
+
+java -Xmx5G -jar aracne-ap.jar -o outputFolder --consolidate
+
+#################################################################################
+
+
+setwd("E:/super.lesson/lesson5/pbmc/")
+##The data must first be saved in a format that is compatible with the Java 
+###based ARACNe-AP implementation included in this pipeline:
+## ARACNeTable(cpm.mat, 'out/pbmc-cpm.tsv')
+
+
+RegProcess('outputFolder/bootstrapNetwork_ul3atth75o35ngtur8ibskqq7s.txt', cpm.mat, out.dir = 'out/', out.name = 'huage_r1-net-')
+
+###################################################################################
+#First clustering analysis
+#Once the ARACNe network has been generated, we can infer protein activity as follows:
+
+r1.net <- readRDS('tutorial/pbmc_r1-net-pruned.rds')
+r1.pAct <- viper(rank.mat, r1.net, method = 'none')
+
+r1.viperDist <- as.dist(viperSimilarity(r1.pAct))
+r1.clusts <- PamKRange(r1.viperDist, kmin = 2, kmax = 10)
+
+r1.clustSil <- SilScoreEval(r1.clusts, r1.viperDist)
+plot.dat <- data.frame('k' = 2:10, 'Silhouette.Scores' = r1.clustSil)
+ggplot(plot.dat, aes(x = k, y = Silhouette.Scores)) + geom_point() + geom_line() +
+  ggtitle('1.1 Clustering Silhouette Scores') + theme_bw()
+
+
+r1.clustMats <- MakeCMfA(filt.mat, r1.viperDist, clustering = r1.clusts$k2, out.dir = 'out/', out.name = 'pbmc-r1-clusts')
+
+
+##################################################################################
+
+java -Xmx5G -jar aracne-ap.jar -e pbmc-r1-clusts_clust-1-metaCells.tsv  -o out.m1 --tfs tf-ensembl.txt  --pvalue 1E-8 --seed 1 --calculateThreshold
+java -Xmx5G -jar aracne-ap.jar -e pbmc-r1-clusts_clust-1-metaCells.tsv  -o out.m1 --tfs tf-ensembl.txt --pvalue 1E-8 --seed 1  --threads 15
+java -Xmx5G -jar aracne-ap.jar -o out.m1 --consolidate
+
+java -Xmx5G -jar aracne-ap.jar -e pbmc-r1-clusts_clust-2-metaCells.tsv  -o out.m2 --tfs tf-ensembl.txt  --pvalue 1E-8 --seed 1 --calculateThreshold
+java -Xmx5G -jar aracne-ap.jar -e pbmc-r1-clusts_clust-2-metaCells.tsv  -o out.m2 --tfs tf-ensembl.txt --pvalue 1E-8 --seed 1  --threads 15
+java -Xmx5G -jar aracne-ap.jar -o out.m2 --consolidate
+
+#################################################################################
+
+
+
+RegProcess('out/out.m1/bootstrapNetwork_ul3atth75o35ngtur8ibskqq7s.txt', cpm.mat, out.dir = '.', out.name = 'huage_r2-net-c1-')
+RegProcess('out/out.m2/bootstrapNetwork_ul3atth75o35ngtur8ibskqq7s.txt', cpm.mat, out.dir = '.', out.name = 'huage_r2-net-c2-')
+
+c1.net <- readRDS('tutorial/pbmc-r2-c1_pruned.rds')
+c2.net <- readRDS('tutorial/pbmc-r2-c2_pruned.rds')
+
+
+# infer protein activity
+r2.pAct <- viper(rank.mat, list('c1' = c1.net, 'c2' = c2.net ), method = 'none')
+
+##the most representative proteins (i.e. top differentially activated proteins) are selected on a cell-by-cell basis and used for downstream clustering analysis.
+
+r2.cbcMRs <- CBCMRs(r2.pAct) # identify the most representative proteins
+r2.pAct.cbc <- r2.pAct[ r2.cbcMRs ,] # filter the protein activity matrix
+r2.louvain <- LouvainClust(r2.pAct.cbc) # perform clustering analysis
+## umap可视化
+r2.cbcUMAP <- CustomUMAP(r2.pAct.cbc)
+ClusterScatter(r2.cbcUMAP, r2.louvain, 'Viper Clustering (Louvain)')
+
+##################################################################################
+r2.pAct <- Ensemble2GeneName(r2.pAct)
+r2.MRs <- BTTestMRs(r2.pAct, r2.louvain)
+
+ClusterHeatmap(r2.pAct[ MR_UnWrap(r2.MRs, top = 10) , ], clust = r2.louvain, plotTitle = 'Louvain Clustering: Differentially Activated Proteins')
+
+markers <-rownames(r2.pAct)[1:5]
+MarkerGrid(r2.cbcUMAP, r2.louvain, r2.pAct, markers, 'PBMC Marker Activity')

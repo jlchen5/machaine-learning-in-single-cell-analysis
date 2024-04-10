@@ -1,0 +1,199 @@
+##系统报错改为英文
+Sys.setenv(LANGUAGE = "en")
+##禁止转化为因子
+options(stringsAsFactors = FALSE)
+##清空环境
+rm(list=ls())
+
+install.packages('remotes')
+remotes::install_version("Seurat", version = "3.2.0")
+ 
+install.packages('Seurat')
+getwd()
+ 
+###加载所需要的包
+library(Seurat)
+library(tidyverse)
+library(dplyr)
+library(patchwork)
+####清除环境，就是把环境清空了
+rm(list=ls())
+
+##读取10x的数据
+scRNA.counts=Read10X("E:/super.lesson/lesson1/GSE152048_BC21.matrix/BC21/")
+class(scRNA.counts)
+
+###创建Seurat对象
+?CreateSeuratObject
+scRNA = CreateSeuratObject(scRNA.counts ,min.cells = 3,project="os", min.features = 300)
+view(scRNA)
+View(scRNA)
+
+
+### s3 data.frame  list  character matirx 
+###s4 层级结构
+
+##第一种s4对象的提取方法  点击白框
+phe=scRNA@meta.data
+count=scRNA@assays[["RNA"]]@counts
+z=scRNA@assays[["RNA"]]@counts@Dimnames[[2]]
+
+#####第二提取s4对象的方法 @ $交替使用
+count=scRNA@assays$RNA@counts
+scRNA@meta.data
+
+
+#查看样本的细胞数量
+table(scRNA@meta.data$orig.ident)        
+##计算质控指标
+#计算细胞中线粒体基因比例
+?PercentageFeatureSet
+scRNA[[]]
+scRNA[["percent.mt"]] <- PercentageFeatureSet(scRNA, pattern = "^MT-")
+#计算红细胞比例
+HB.genes <- c("HBA1","HBA2","HBB","HBD","HBE1","HBG1","HBG2","HBM","HBQ1","HBZ")
+HB_m <- match(HB.genes, rownames(scRNA@assays$RNA)) 
+HB.genes <- rownames(scRNA@assays$RNA)[HB_m] 
+HB.genes <- HB.genes[!is.na(HB.genes)] 
+scRNA[["percent.HB"]]<-PercentageFeatureSet(scRNA, features=HB.genes) 
+#head(scRNA@meta.data)
+col.num <- length(levels(scRNA@active.ident))
+####Feature、count、线粒体基因、红细胞基因占比可视化。
+violin <- VlnPlot(scRNA,
+                  features = c("nFeature_RNA", "nCount_RNA", "percent.mt","percent.HB"), 
+                  cols =rainbow(col.num), 
+                  pt.size = 0.01, #不需要显示点，可以设置pt.size = 0
+                  ncol = 4) + 
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) 
+###把图片画到画板上面
+violin
+#####以后保存图片都手动保存 不要用代码保存了。
+#####你做到保存图片的时候喊师傅  我们语音聊天 我教你怎么保存
+ggsave("vlnplot_before_qc.pdf", plot = violin, width = 12, height = 6) 
+ggsave("vlnplot_before_qc.png", plot = violin, width = 12, height = 6)  
+###这几个指标之间的相关性。 把图画到画板上，然后手动保存
+plot1=FeatureScatter(scRNA, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2=FeatureScatter(scRNA, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot3=FeatureScatter(scRNA, feature1 = "nCount_RNA", feature2 = "percent.HB")
+pearplot <- CombinePlots(plots = list(plot1, plot2, plot3), nrow=1, legend="none") 
+plot1
+####看画板
+plot2
+####看画板
+plot3
+####看画板
+pearplot
+####看画板
+#自己选择性保存图片，但是 pearplot的图片必须要看，因为这个是做质控用的
+##我们可以看到，nFeature_RNA的范围在0到8000之内，percent.mt代表线粒体含量
+###我们默认线粒体含量至少要小于20%，这是根据生物学知识得出的默认阈值。红细胞的数目要至少小于5%
+###至于nFeature_RNA和nCount_RNA的阈值怎么确定，这个要结合 pearplot的图来判断。我们质控的目标就是删除离异值。而且注意阈值尽可能取的宽松一下，防止后面分析想要的细胞得不到。
+###接下来从pearplot的图片来做质控---剔除离异值
+##nFeature_RNA选择大于200 小于7500的 nFeature_RNA选择小于100000，percent.mt小于20，percent.HB小于5
+scRNA1 <- subset(scRNA, subset = nFeature_RNA > 300& nFeature_RNA < 7000 & percent.mt < 10 & percent.HB < 3 & nCount_RNA < 100000)
+scRNA
+scRNA1
+###在控制台中我们可以看到有500多细胞过滤了
+####过滤完之后 我们就要对数据进行均一化，使用NormalizeData这个函数。
+###注意均一化是用NormalizeData，标准化是用ScaleData
+?NormalizeData
+scRNA1 <- NormalizeData(scRNA1, normalization.method = "LogNormalize", scale.factor = 10000)
+###好了，这一节数据加载、质控的内容就算是做完了。
+###在我们关闭rstudio之前 先把环境中运行好的数据保存一下
+###数据将保存在之前设定好的路径中。还有保存的scRNA1，不是scRNA，因为scRNA1才是过滤好的数据。
+save(scRNA1,file='scRNA1.Rdata')
+
+
+###官方推荐是2000个高变基因，很多文章也有设置30000的，这个因自己的实验项目决定
+scRNA1 <- FindVariableFeatures(scRNA1, selection.method = "vst", nfeatures = 3000) 
+# Identify the 10 most highly variable genes，把top10的高变基因挑选出来，目的是为了作图
+top10 <- head(VariableFeatures(scRNA1), 10) 
+# plot variable features with and without labels  画出来不带标签的高变基因图
+plot1 <- VariableFeaturePlot(scRNA1) 
+###把top10的基因加到图中
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE, size=2.5) 
+plot <- CombinePlots(plots = list(plot1, plot2),legend="bottom") 
+###画图
+plot 
+####去画板看看 想保存就自己手动保存 
+
+
+
+##如果内存足够最好对所有基因进行中心化
+scale.genes <-  rownames(scRNA1)
+scRNA1 <- ScaleData(scRNA1, features = scale.genes)
+##如果内存不够，可以只对高变基因进行标准化
+#scale.genes <-  VariableFeatures(scRNA)
+#scRNA <- ScaleData(scRNA, features = scale.genes)
+
+
+#细胞周期回归：上一步找到的高变基因，常常会包含一些细胞周期相关基因。
+#它们会导致细胞聚类发生一定的偏移，即相同类型的细胞在聚类时会因为细胞周期的不同而分开。
+?CaseMatch
+cc.genes
+CaseMatch(c(cc.genes$s.genes,cc.genes$g2m.genes),VariableFeatures(scRNA1))
+#细胞周期评分
+g2m_genes = cc.genes$g2m.genes
+g2m_genes = CaseMatch(search = g2m_genes, match = rownames(scRNA1))
+s_genes = cc.genes$s.genes
+s_genes = CaseMatch(search = s_genes, match = rownames(scRNA1))
+scRNA1 <- CellCycleScoring(object=scRNA1,  g2m.features=g2m_genes,  s.features=s_genes)
+#查看细胞周期基因对细胞聚类的影响
+scRNAa <- RunPCA(scRNA1, features = c(s_genes, g2m_genes))
+p <- DimPlot(scRNAa, reduction = "pca", group.by = "Phase")
+p
+
+VlnPlot(scRNAa, features = c("nFeature_RNA", "nCount_RNA", "percent.mt","percent.HB","G2M.Score","S.Score"), ncol = 6)
+ggsave("cellcycle_pca.png", p, width = 8, height = 6)
+ 
+#scRNAb <- ScaleData(scRNA1, vars.to.regress = c("S.Score", "G2M.Score"), features = rownames(scRNA1))
+
+
+
+scRNA1 <- RunPCA(scRNA1, features = VariableFeatures(scRNA1)) 
+plot1 <- DimPlot(scRNA1, reduction = "pca", group.by="orig.ident") 
+
+
+ElbowPlot(scRNA1, ndims=20, reduction="pca") 
+
+pc.num=1:20
+scRNA1 <- FindNeighbors(scRNA1, dims = pc.num) 
+scRNA1 <- FindClusters(scRNA1, resolution = 1.0)
+
+
+scRNA1<-BuildClusterTree(scRNA1)
+PlotClusterTree(scRNA1)
+
+
+scRNA1 = RunTSNE(scRNA1, dims = pc.num)
+embed_tsne <- Embeddings(scRNA1, 'tsne')
+write.csv(embed_tsne,'embed_tsne.csv')
+plot1 = DimPlot(scRNA1, reduction = "tsne") 
+##画图
+plot1
+###label = TRUE把注释展示在图中
+DimPlot(scRNA1, reduction = "tsne",label = TRUE) 
+###你会发现cluster都标了图中
+ggsave("tSNE.pdf", plot = plot1, width = 8, height = 7)
+##把图片保存一下
+
+#UMAP---第二种可视化降维
+scRNA1 <- RunUMAP(scRNA1, dims = pc.num)
+embed_umap <- Embeddings(scRNA1, 'umap')
+write.csv(embed_umap,'embed_umap.csv') 
+plot2 = DimPlot(scRNA1, reduction = "umap") 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
